@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 AI 聊天记录导出工具 - 图形界面版
-支持从 DeepSeek 分享链接提取对话，导出为 Markdown / Word / JSON。
+支持从 DeepSeek / 智谱清言 分享链接提取对话，导出为 Markdown / Word / JSON。
 
 启动方式:
     python chat_exporter_gui.py
@@ -33,12 +33,19 @@ def sanitize_filename(name, max_len=60):
 
 
 def extract_from_url(url, timeout=30000, progress_callback=None):
-    """从 URL 提取对话内容，返回 (messages, meta)。"""
+    """从 URL 提取对话内容，返回 (messages, meta, platform)。"""
+    # 检测平台
+    if "deepseek.com/share/" in url:
+        platform = "deepseek"
+    elif "chatglm.cn/share/" in url:
+        platform = "chatglm"
+    else:
+        raise ValueError("不支持的链接格式，请使用 DeepSeek 或智谱清言的分享链接")
+
     if progress_callback:
         progress_callback("正在启动浏览器...")
 
     with sync_playwright() as p:
-        # 优先使用系统 Chrome，避免打包后找不到浏览器
         try:
             browser = p.chromium.launch(headless=True, channel="chrome")
         except Exception:
@@ -54,169 +61,191 @@ def extract_from_url(url, timeout=30000, progress_callback=None):
 
         page.goto(url, wait_until="networkidle", timeout=timeout)
 
-        try:
-            page.wait_for_selector(".ds-message", timeout=timeout)
-        except Exception:
-            pass
-
-        page.wait_for_timeout(3000)
+        if platform == "deepseek":
+            try:
+                page.wait_for_selector(".ds-message", timeout=timeout)
+            except Exception:
+                pass
+            page.wait_for_timeout(3000)
+        else:
+            page.wait_for_timeout(5000)
 
         if progress_callback:
             progress_callback("正在提取元信息...")
 
-        meta = page.evaluate("""() => {
-            const info = {};
-            info.pageTitle = document.title || '';
-            const firstUserMsg = document.querySelector('.ds-collapsible-text, .fbb737a4');
-            info.firstMessage = firstUserMsg ? firstUserMsg.innerText.substring(0, 150) : '';
-            const ogTitle = document.querySelector('meta[property="og:title"]');
-            info.ogTitle = ogTitle ? ogTitle.content : '';
-            const fileEl = document.querySelector('._967f3f9, .e70accd6');
-            info.fileName = fileEl ? fileEl.innerText.trim() : '';
-            const thinkEls = document.querySelectorAll('.ds-think-content');
-            let paperTitle = '';
-            for (const el of thinkEls) {
-                const text = el.innerText || '';
-                const titleMatch = text.match(/题目[：:](.+)/);
-                if (titleMatch) { paperTitle = titleMatch[1].trim(); break; }
-                const engMatch = text.match(/(Predictive design.+?)(?:[.。\\\\n]|$)/i);
-                if (engMatch) { paperTitle = engMatch[1].trim(); break; }
-            }
-            info.paperTitle = paperTitle;
-            return info;
-        }""")
+        if platform == "deepseek":
+            meta = page.evaluate("""() => {
+                const info = {};
+                info.pageTitle = document.title || '';
+                const firstUserMsg = document.querySelector('.ds-collapsible-text, .fbb737a4');
+                info.firstMessage = firstUserMsg ? firstUserMsg.innerText.substring(0, 150) : '';
+                const ogTitle = document.querySelector('meta[property="og:title"]');
+                info.ogTitle = ogTitle ? ogTitle.content : '';
+                const fileEl = document.querySelector('._967f3f9, .e70accd6');
+                info.fileName = fileEl ? fileEl.innerText.trim() : '';
+                const thinkEls = document.querySelectorAll('.ds-think-content');
+                let paperTitle = '';
+                for (const el of thinkEls) {
+                    const text = el.innerText || '';
+                    const titleMatch = text.match(/题目[：:](.+)/);
+                    if (titleMatch) { paperTitle = titleMatch[1].trim(); break; }
+                    const engMatch = text.match(/(Predictive design.+?)(?:[.。\\\\n]|$)/i);
+                    if (engMatch) { paperTitle = engMatch[1].trim(); break; }
+                }
+                info.paperTitle = paperTitle;
+                return info;
+            }""")
+        else:
+            meta = page.evaluate("""() => {
+                const info = {};
+                info.pageTitle = document.title || '';
+                const firstQuestion = document.querySelector('.question-txt');
+                info.firstMessage = firstQuestion ? firstQuestion.innerText.substring(0, 150) : '';
+                const fileEl = document.querySelector('.question-file .file-box');
+                info.fileName = fileEl ? fileEl.innerText.trim().replace(/\\s*PDF\\s*[\\d.]+MB/, '') : '';
+                return info;
+            }""")
 
         if progress_callback:
             progress_callback("正在提取对话消息...")
 
-        messages = page.evaluate("""() => {
-            // 深度遍历节点，将公式块整体提取为 LaTeX 文本
-            function extractNodeText(node) {
-                if (node.nodeType === 3) {
-                    return node.textContent;
-                }
-                if (node.nodeType !== 1) return '';
-
-                const tag = node.tagName;
-                const cls = (typeof node.className === 'string') ? node.className : '';
-
-                // 跳过脚本、样式、按钮等
-                if (['SCRIPT', 'STYLE', 'BUTTON', 'SVG', 'PATH'].includes(tag)) return '';
-
-                // 公式容器：KaTeX / MathJax / 自定义数学块
-                if (cls.includes('katex') || cls.includes('math') || cls.includes('equation') || tag === 'MATH') {
-                    // 尝试获取 annotation 中的 LaTeX 源码
-                    const ann = node.querySelector('annotation[encoding="application/x-tex"]');
-                    if (ann) return '$' + ann.textContent + '$';
-                    // 否则返回可见文本（去掉多余空白）
-                    return '$' + node.innerText.replace(/\\s+/g, ' ').trim() + '$';
-                }
-
-                // 代码块
-                if (tag === 'CODE' || tag === 'PRE') {
-                    return '`' + node.innerText + '`';
-                }
-
-                // 表格 → Markdown 表格
-                if (tag === 'TABLE') {
-                    return extractTable(node);
-                }
-
-                // 图片
-                if (tag === 'IMG') {
-                    const alt = node.alt || '';
-                    const src = node.src || '';
-                    return '![' + alt + '](' + src + ')';
-                }
-
-                // 换行
-                if (tag === 'BR') return '\\n';
-
-                // 块级元素前加换行
-                const blockTags = ['P', 'DIV', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6',
-                                   'LI', 'TR', 'BLOCKQUOTE', 'SECTION', 'ARTICLE'];
-                const isBlock = blockTags.includes(tag);
-
-                // 递归处理子节点
-                let result = '';
-                for (const child of node.childNodes) {
-                    result += extractNodeText(child);
-                }
-
-                // 清理多余空白但保留公式内的空格
-                if (!cls.includes('katex') && !cls.includes('math')) {
-                    result = result.replace(/  +/g, ' ');
-                }
-
-                if (isBlock && result.trim()) {
-                    result = '\\n' + result.trim() + '\\n';
-                }
-
-                return result;
-            }
-
-            function extractTable(table) {
-                const rows = [];
-                for (const tr of table.querySelectorAll('tr')) {
-                    const cells = [];
-                    for (const td of tr.querySelectorAll('td, th')) {
-                        cells.push(td.innerText.replace(/\\|/g, '\\\\|').trim());
+        if platform == "deepseek":
+            messages = page.evaluate("""() => {
+                function extractNodeText(node) {
+                    if (node.nodeType === 3) {
+                        return node.textContent;
                     }
-                    rows.push(cells);
-                }
-                if (rows.length === 0) return '';
-                // 表头
-                let md = '| ' + rows[0].join(' | ') + ' |\\n';
-                md += '| ' + rows[0].map(() => '---').join(' | ') + ' |\\n';
-                for (let i = 1; i < rows.length; i++) {
-                    md += '| ' + rows[i].join(' | ') + ' |\\n';
-                }
-                return '\\n' + md;
-            }
+                    if (node.nodeType !== 1) return '';
 
-            const results = [];
-            const allMsgs = document.querySelectorAll('.ds-message');
-            for (const msg of allMsgs) {
-                const aiMain = msg.querySelector('.ds-assistant-message-main-content');
-                if (aiMain) {
-                    let mainContent = extractNodeText(aiMain);
+                    const tag = node.tagName;
+                    const cls = (typeof node.className === 'string') ? node.className : '';
 
-                    // 移除思考内容
-                    const thinkEl = msg.querySelector('.ds-think-content');
-                    if (thinkEl) {
-                        const thinkText = extractNodeText(thinkEl);
-                        if (mainContent.startsWith(thinkText)) {
-                            mainContent = mainContent.substring(thinkText.length).trim();
+                    if (['SCRIPT', 'STYLE', 'BUTTON', 'SVG', 'PATH'].includes(tag)) return '';
+
+                    if (cls.includes('katex') || cls.includes('math') || cls.includes('equation') || tag === 'MATH') {
+                        const ann = node.querySelector('annotation[encoding="application/x-tex"]');
+                        if (ann) return '$' + ann.textContent + '$';
+                        return '$' + node.innerText.replace(/\\s+/g, ' ').trim() + '$';
+                    }
+
+                    if (tag === 'CODE' || tag === 'PRE') {
+                        return '`' + node.innerText + '`';
+                    }
+
+                    if (tag === 'TABLE') {
+                        return extractTable(node);
+                    }
+
+                    if (tag === 'IMG') {
+                        const alt = node.alt || '';
+                        const src = node.src || '';
+                        return '![' + alt + '](' + src + ')';
+                    }
+
+                    if (tag === 'BR') return '\\n';
+
+                    const blockTags = ['P', 'DIV', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6',
+                                       'LI', 'TR', 'BLOCKQUOTE', 'SECTION', 'ARTICLE'];
+                    const isBlock = blockTags.includes(tag);
+
+                    let result = '';
+                    for (const child of node.childNodes) {
+                        result += extractNodeText(child);
+                    }
+
+                    if (!cls.includes('katex') && !cls.includes('math')) {
+                        result = result.replace(/  +/g, ' ');
+                    }
+
+                    if (isBlock && result.trim()) {
+                        result = '\\n' + result.trim() + '\\n';
+                    }
+
+                    return result;
+                }
+
+                function extractTable(table) {
+                    const rows = [];
+                    for (const tr of table.querySelectorAll('tr')) {
+                        const cells = [];
+                        for (const td of tr.querySelectorAll('td, th')) {
+                            cells.push(td.innerText.replace(/\\|/g, '\\\\|').trim());
                         }
+                        rows.push(cells);
                     }
-
-                    // 清理：去掉连续空行，保留公式
-                    mainContent = mainContent.replace(/\\n{3,}/g, '\\n\\n').trim();
-
-                    if (mainContent && mainContent.length > 5) {
-                        results.push({ role: 'assistant', content: mainContent });
+                    if (rows.length === 0) return '';
+                    let md = '| ' + rows[0].join(' | ') + ' |\\n';
+                    md += '| ' + rows[0].map(() => '---').join(' | ') + ' |\\n';
+                    for (let i = 1; i < rows.length; i++) {
+                        md += '| ' + rows[i].join(' | ') + ' |\\n';
                     }
-                } else {
-                    const userEl = msg.querySelector('.ds-collapsible-text') ||
-                                   msg.querySelector('.fbb737a4') ||
-                                   msg.querySelector('._25c7358');
-                    if (userEl) {
-                        const content = userEl.innerText.trim();
-                        if (content && content.length > 2) {
-                            results.push({ role: 'user', content: content });
+                    return '\\n' + md;
+                }
+
+                const results = [];
+                const allMsgs = document.querySelectorAll('.ds-message');
+                for (const msg of allMsgs) {
+                    const aiMain = msg.querySelector('.ds-assistant-message-main-content');
+                    if (aiMain) {
+                        let mainContent = extractNodeText(aiMain);
+                        const thinkEl = msg.querySelector('.ds-think-content');
+                        if (thinkEl) {
+                            const thinkText = extractNodeText(thinkEl);
+                            if (mainContent.startsWith(thinkText)) {
+                                mainContent = mainContent.substring(thinkText.length).trim();
+                            }
+                        }
+                        mainContent = mainContent.replace(/\\n{3,}/g, '\\n\\n').trim();
+                        if (mainContent && mainContent.length > 5) {
+                            results.push({ role: 'assistant', content: mainContent });
+                        }
+                    } else {
+                        const userEl = msg.querySelector('.ds-collapsible-text') ||
+                                       msg.querySelector('.fbb737a4') ||
+                                       msg.querySelector('._25c7358');
+                        if (userEl) {
+                            const content = userEl.innerText.trim();
+                            if (content && content.length > 2) {
+                                results.push({ role: 'user', content: content });
+                            }
                         }
                     }
                 }
-            }
-            return results;
-        }""")
+                return results;
+            }""")
+        else:
+            messages = page.evaluate("""() => {
+                const items = document.querySelectorAll('.conversation-item');
+                const messages = [];
+
+                for (const item of items) {
+                    const questionTxt = item.querySelector('.question-txt');
+                    if (questionTxt) {
+                        const userText = questionTxt.innerText.trim();
+                        if (userText) {
+                            messages.push({role: 'user', content: userText});
+                        }
+                    }
+
+                    const answerWraps = item.querySelectorAll('.answer-content-wrap:not(.text-advance-thinking-content)');
+                    if (answerWraps.length > 0) {
+                        const lastAnswer = answerWraps[answerWraps.length - 1];
+                        const answerText = lastAnswer.innerText.trim();
+                        if (answerText) {
+                            messages.push({role: 'assistant', content: answerText});
+                        }
+                    }
+                }
+
+                return messages;
+            }""")
 
         browser.close()
 
-    return messages, meta
+    return messages, meta, platform
 
 
-def generate_smart_filename(meta):
+def generate_smart_filename(meta, platform="deepseek"):
     """根据元信息生成智能文件名。"""
     topic = ""
     file_name = meta.get("fileName", "")
@@ -231,12 +260,12 @@ def generate_smart_filename(meta):
     if not topic:
         topic = meta.get("pageTitle", "")
     if not topic:
-        topic = "deepseek_chat"
+        topic = "ai_chat"
     safe_name = sanitize_filename(topic)
-    return safe_name if safe_name else "deepseek_chat"
+    return safe_name if safe_name else "ai_chat"
 
 
-def parse_messages_to_markdown(messages, title="DeepSeek 对话记录"):
+def parse_messages_to_markdown(messages, title="AI 对话记录"):
     """将消息列表转换为 Markdown 格式，一问一答配对。
     支持将一条包含多个问题的消息拆分为多个独立问答对。
     """
@@ -510,8 +539,8 @@ class ChatExporterGUI:
         if not url:
             messagebox.showwarning("提示", "请输入分享链接")
             return
-        if "deepseek.com/share/" not in url:
-            messagebox.showwarning("提示", "目前仅支持 DeepSeek 分享链接\n(chat.deepseek.com/share/...)")
+        if "deepseek.com/share/" not in url and "chatglm.cn/share/" not in url:
+            messagebox.showwarning("提示", "支持的链接格式:\n- DeepSeek (chat.deepseek.com/share/...)\n- 智谱清言 (chatglm.cn/share/...)")
             return
 
         # 在后台线程执行导出
@@ -521,14 +550,14 @@ class ChatExporterGUI:
 
     def _export_thread(self, url):
         try:
-            messages, meta = extract_from_url(
+            messages, meta, platform = extract_from_url(
                 url, progress_callback=lambda msg: self.root.after(0, self.progress_var.set, msg)
             )
             if not messages:
                 self.root.after(0, self._on_error, "未能提取到对话内容")
                 return
 
-            safe_name = generate_smart_filename(meta)
+            safe_name = generate_smart_filename(meta, platform)
             output_base = self.output_dir / safe_name
 
             saved = []

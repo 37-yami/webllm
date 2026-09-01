@@ -1,10 +1,11 @@
-# DeepSeek Chat Exporter
+# AI Chat Exporter
 
-将 DeepSeek 分享链接中的对话导出为 Markdown、Word 或 JSON 文件。
+将 DeepSeek / 智谱清言 分享链接中的对话导出为 Markdown、Word 或 JSON 文件。
 
 ## 功能特性
 
-- **智能提取**：自动从 DeepSeek 分享链接提取完整对话内容
+- **多平台支持**：DeepSeek、智谱清言（ChatGLM）
+- **智能提取**：自动从分享链接提取完整对话内容
 - **公式保留**：支持提取数学公式（LaTeX 格式）、代码块、表格
 - **问答配对**：自动将多问题消息拆分为独立的问答对
 - **智能命名**：根据上传文件名、论文标题或对话内容自动生成文件名
@@ -12,22 +13,25 @@
 - **图形界面**：提供 GUI 界面，支持双击打开导出文件
 - **批量处理**：命令行版支持批量导出多个链接
 
-## 截图
+## 支持平台
 
-![GUI 界面](screenshot.png)
+| 平台 | 链接格式 |
+|------|----------|
+| DeepSeek | `chat.deepseek.com/share/...` |
+| 智谱清言 | `chatglm.cn/share/...` |
 
 ## 安装
 
 ### 方式一：直接运行 EXE（推荐）
 
-从 [Releases](https://github.com/your-username/deepseek-chat-exporter/releases) 下载最新版本，双击 `聊天记录导出工具.exe` 即可运行。
+从 [Releases](https://github.com/your-username/ai-chat-exporter/releases) 下载最新版本，双击 `聊天记录导出工具.exe` 即可运行。
 
 ### 方式二：从源码运行
 
 ```bash
 # 克隆仓库
-git clone https://github.com/your-username/deepseek-chat-exporter.git
-cd deepseek-chat-exporter
+git clone https://github.com/your-username/ai-chat-exporter.git
+cd ai-chat-exporter
 
 # 安装依赖
 pip install -r requirements.txt
@@ -54,7 +58,7 @@ pyinstaller --onefile --windowed --name "聊天记录导出工具" --icon icon.i
 ### GUI 版
 
 1. 双击运行 `聊天记录导出工具.exe`
-2. 在输入框粘贴 DeepSeek 分享链接
+2. 在输入框粘贴分享链接（DeepSeek 或智谱清言）
 3. 选择输出格式（可多选）
 4. 点击「开始导出」
 5. 在文件列表中双击打开导出的文件
@@ -62,8 +66,11 @@ pyinstaller --onefile --windowed --name "聊天记录导出工具" --icon icon.i
 ### 命令行版
 
 ```bash
-# 基本用法（自动命名，导出到 ./output 目录）
+# DeepSeek
 python extract_chat.py "https://chat.deepseek.com/share/xxxxx"
+
+# 智谱清言
+python extract_chat.py "https://chatglm.cn/share/YFmQkzW3"
 
 # 指定输出文件名
 python extract_chat.py "https://chat.deepseek.com/share/xxxxx" -o "我的对话"
@@ -143,7 +150,7 @@ Pillow>=10.0.0
 ## 项目结构
 
 ```
-deepseek-chat-exporter/
+ai-chat-exporter/
 ├── chat_exporter_gui.py    # GUI 版主程序
 ├── extract_chat.py         # 命令行版主程序
 ├── icon.ico                # 应用图标

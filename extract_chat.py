@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """
 AI 聊天记录导出工具
-支持从 DeepSeek 分享链接提取对话，导出为 Markdown 或 Word 文档。
+支持从 DeepSeek / 智谱清言 分享链接提取对话，导出为 Markdown、Word 或 JSON。
 
 用法:
     python extract_chat.py <分享链接> [-o 输出路径] [-f 格式] [--headed]
 
-支持平台: DeepSeek (chat.deepseek.com/share/...)
+支持平台:
+  - DeepSeek (chat.deepseek.com/share/...)
+  - 智谱清言 (chatglm.cn/share/...)
 """
 
 import argparse
@@ -199,7 +201,60 @@ def extract_deepseek(page, url, timeout=30000):
     return messages, meta
 
 
-def parse_messages_to_markdown(messages, title="DeepSeek 对话记录"):
+def extract_chatglm(page, url, timeout=30000):
+    """提取智谱清言分享链接中的对话内容及元信息。"""
+    page.goto(url, wait_until="networkidle", timeout=timeout)
+    page.wait_for_timeout(5000)
+
+    # 提取元信息
+    meta = page.evaluate("""() => {
+        const info = {};
+        info.pageTitle = document.title || '';
+
+        // 第一条用户消息
+        const firstQuestion = document.querySelector('.question-txt');
+        info.firstMessage = firstQuestion ? firstQuestion.innerText.substring(0, 150) : '';
+
+        // 文件附件
+        const fileEl = document.querySelector('.question-file .file-box');
+        info.fileName = fileEl ? fileEl.innerText.trim().replace(/\\s*PDF\\s*[\\d.]+MB/, '') : '';
+
+        return info;
+    }""")
+
+    # 提取消息
+    messages = page.evaluate("""() => {
+        const items = document.querySelectorAll('.conversation-item');
+        const messages = [];
+
+        for (const item of items) {
+            // 用户消息
+            const questionTxt = item.querySelector('.question-txt');
+            if (questionTxt) {
+                const userText = questionTxt.innerText.trim();
+                if (userText) {
+                    messages.push({role: 'user', content: userText});
+                }
+            }
+
+            // AI 回答（排除思考过程）
+            const answerWraps = item.querySelectorAll('.answer-content-wrap:not(.text-advance-thinking-content)');
+            if (answerWraps.length > 0) {
+                const lastAnswer = answerWraps[answerWraps.length - 1];
+                const answerText = lastAnswer.innerText.trim();
+                if (answerText) {
+                    messages.push({role: 'assistant', content: answerText});
+                }
+            }
+        }
+
+        return messages;
+    }""")
+
+    return messages, meta
+
+
+def parse_messages_to_markdown(messages, title="AI 对话记录"):
     """将消息列表转换为 Markdown 格式，一问一答配对。
     支持将一条包含多个问题的消息拆分为多个独立问答对。
     """
@@ -353,7 +408,7 @@ def main():
     parser = argparse.ArgumentParser(
         description="AI 聊天记录导出工具 - 从分享链接提取对话"
     )
-    parser.add_argument("url", help="分享链接 (目前支持 DeepSeek)")
+    parser.add_argument("url", help="分享链接 (DeepSeek / 智谱清言)")
     parser.add_argument("-o", "--output", help="输出文件名（不含扩展名），默认从对话内容自动生成到 ./output 目录", default=None)
     parser.add_argument(
         "-f",
@@ -375,13 +430,17 @@ def main():
     url = args.url
     if "deepseek.com/share/" in url:
         platform = "deepseek"
+    elif "chatglm.cn/share/" in url:
+        platform = "chatglm"
     else:
         print(f"错误: 不支持的链接格式: {url}")
-        print("目前支持: DeepSeek (chat.deepseek.com/share/...)")
+        print("目前支持:")
+        print("  - DeepSeek (chat.deepseek.com/share/...)")
+        print("  - 智谱清言 (chatglm.cn/share/...)")
         sys.exit(1)
 
     print(f"[信息] 正在打开链接: {url}")
-    print(f"[信息] 平台: DeepSeek")
+    print(f"[信息] 平台: {'DeepSeek' if platform == 'deepseek' else '智谱清言'}")
     print(f"[信息] 输出格式: {args.format}")
 
     with sync_playwright() as p:
@@ -397,7 +456,10 @@ def main():
         page = context.new_page()
 
         try:
-            messages, meta = extract_deepseek(page, url, args.timeout)
+            if platform == "deepseek":
+                messages, meta = extract_deepseek(page, url, args.timeout)
+            else:
+                messages, meta = extract_chatglm(page, url, args.timeout)
 
             if not messages:
                 print("[错误] 未能提取到对话内容。可能原因:")
@@ -445,11 +507,11 @@ def main():
                     topic = meta.get("pageTitle", "")
                 
                 if not topic:
-                    topic = "deepseek_chat"
+                    topic = "ai_chat"
                 
                 safe_name = sanitize_filename(topic)
                 if not safe_name:
-                    safe_name = "deepseek_chat"
+                    safe_name = "ai_chat"
                 
                 output_base = output_dir / safe_name
 
