@@ -35,6 +35,19 @@ def sanitize_filename(name, max_len=60):
     return name
 
 
+def add_ext(base, ext):
+    """为不含扩展名的路径追加扩展名。
+
+    不使用 Path.with_suffix()，因为它会把文件名中最后一个 "." 之后的内容
+    当作旧扩展名替换掉（例如 "Qwen2.5模型评测" 会变成 "Qwen2.md"）。
+    若路径已带目标扩展名则原样返回。
+    """
+    base = Path(base)
+    if base.suffix.lower() == ext:
+        return base
+    return base.with_name(base.name + ext)
+
+
 def extract_deepseek(page, url, timeout=30000):
     """提取 DeepSeek 分享链接中的对话内容及元信息。"""
     page.goto(url, wait_until="networkidle", timeout=timeout)
@@ -57,11 +70,7 @@ def extract_deepseek(page, url, timeout=30000):
         // 第一条用户消息（作为对话主题）
         const firstUserMsg = document.querySelector('.ds-collapsible-text, .fbb737a4');
         info.firstMessage = firstUserMsg ? firstUserMsg.innerText.substring(0, 150) : '';
-        
-        // og 标签
-        const ogTitle = document.querySelector('meta[property="og:title"]');
-        info.ogTitle = ogTitle ? ogTitle.content : '';
-        
+
         // 文件附件名称
         const fileEl = document.querySelector('._967f3f9, .e70accd6');
         info.fileName = fileEl ? fileEl.innerText.trim() : '';
@@ -180,7 +189,7 @@ def extract_deepseek(page, url, timeout=30000):
 
                 mainContent = mainContent.replace(/\\n{3,}/g, '\\n\\n').trim();
 
-                if (mainContent && mainContent.length > 5) {
+                if (mainContent) {
                     results.push({ role: 'assistant', content: mainContent });
                 }
             } else {
@@ -189,7 +198,7 @@ def extract_deepseek(page, url, timeout=30000):
                                msg.querySelector('._25c7358');
                 if (userEl) {
                     const content = userEl.innerText.trim();
-                    if (content && content.length > 2) {
+                    if (content) {
                         results.push({ role: 'user', content: content });
                     }
                 }
@@ -262,14 +271,17 @@ def parse_messages_to_markdown(messages, title="AI 对话记录"):
 
     def split_questions(text):
         """将包含多个编号问题的文本拆分为独立问题列表。"""
-        parts = _re.split(r'\n(?=\d+[、.．]\s)', text.strip())
+        # 匹配 1、2、3、 或 1. 2. 3. 等编号格式
+        # 中文标点（、．）后不要求空格；英文句点后要求空格，避免误拆 "1.5" 之类数字
+        parts = _re.split(r'\n(?=\d+[、．]\s*|\d+\.\s)', text.strip())
         if len(parts) <= 1:
             parts = _re.split(r'\n(?=(?:问题|Q)\s*\d+)', text.strip())
         return [p.strip() for p in parts if p.strip()]
 
     def split_answers_by_questions(text, expected_count):
         """根据问题数量拆分答案。只在答案段落数与问题数匹配时才拆分。"""
-        parts = _re.split(r'\n(?=\d+[.．：:]\s)', text.strip())
+        # 中文标点（．：）后不要求空格；英文句点/冒号后要求空格
+        parts = _re.split(r'\n(?=\d+[．：]\s*|\d+[.:]\s)', text.strip())
         if len(parts) <= 1:
             parts = _re.split(r'\n(?=\d+\s)', text.strip())
         if len(parts) == expected_count:
@@ -413,9 +425,9 @@ def main():
     parser.add_argument(
         "-f",
         "--format",
-        choices=["markdown", "docx", "both"],
+        choices=["markdown", "docx", "json", "both", "all"],
         default="both",
-        help="输出格式: markdown, docx, 或 both (默认: both)",
+        help="输出格式: markdown, docx, json, both (=md+docx) 或 all (=md+docx+json)，默认: both",
     )
     parser.add_argument(
         "--headed", action="store_true", help="显示浏览器窗口 (调试用)"
@@ -523,14 +535,14 @@ def main():
             # 保存文件
             saved_files = []
 
-            if args.format in ("markdown", "both"):
-                md_path = output_base.with_suffix(".md")
+            if args.format in ("markdown", "both", "all"):
+                md_path = add_ext(output_base, ".md")
                 md_path.write_text(md_content, encoding="utf-8")
                 saved_files.append(str(md_path))
                 print(f"[保存] Markdown: {md_path}")
 
-            if args.format in ("docx", "both"):
-                docx_path = output_base.with_suffix(".docx")
+            if args.format in ("docx", "both", "all"):
+                docx_path = add_ext(output_base, ".docx")
                 if markdown_to_docx(md_content, docx_path):
                     saved_files.append(str(docx_path))
                     print(f"[保存] Word: {docx_path}")
@@ -538,13 +550,14 @@ def main():
                     print("[警告] Word 文档生成失败")
 
             # 保存 JSON (便于后续处理)
-            json_path = output_base.with_suffix(".json")
-            json_path.write_text(
-                json.dumps(messages, ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
-            saved_files.append(str(json_path))
-            print(f"[保存] JSON: {json_path}")
+            if args.format in ("json", "all"):
+                json_path = add_ext(output_base, ".json")
+                json_path.write_text(
+                    json.dumps(messages, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+                saved_files.append(str(json_path))
+                print(f"[保存] JSON: {json_path}")
 
         except Exception as e:
             print(f"[错误] 提取过程中出错: {e}")

@@ -22,11 +22,7 @@
 
 ## 安装
 
-### 方式一：直接运行 EXE（推荐）
-
-从 [Releases](https://github.com/your-username/ai-chat-exporter/releases) 下载最新版本，双击 `聊天记录导出工具.exe` 即可运行。
-
-### 方式二：从源码运行
+从源码运行：
 
 ```bash
 # 克隆仓库
@@ -46,18 +42,11 @@ python chat_exporter_gui.py
 python extract_chat.py "https://chat.deepseek.com/share/xxxxx"
 ```
 
-### 方式三：自行打包 EXE
-
-```bash
-pip install pyinstaller
-pyinstaller --onefile --windowed --name "聊天记录导出工具" --icon icon.ico chat_exporter_gui.py
-```
-
 ## 使用方法
 
 ### GUI 版
 
-1. 双击运行 `聊天记录导出工具.exe`
+1. 运行 `python chat_exporter_gui.py`（或双击[快捷方式](#生成桌面快捷方式)）
 2. 在输入框粘贴分享链接（DeepSeek 或智谱清言）
 3. 选择输出格式（可多选）
 4. 点击「开始导出」
@@ -89,6 +78,23 @@ python extract_chat.py "链接1"
 python extract_chat.py "链接2"
 python extract_chat.py "链接3"
 ```
+
+## 生成桌面快捷方式
+
+`.lnk` 快捷方式中的路径必须与本机一致（Python 路径、项目路径），因此不随仓库分发，
+而是提供脚本在每个用户自己的机器上生成：
+
+```bash
+python create_shortcut.py
+```
+
+脚本会自动：
+
+- 定位当前 Python 解释器对应的 `pythonw.exe`（双击启动时不弹出控制台黑窗口）
+- 以项目内的 `icon.ico` 作为图标
+- 在项目目录生成 `聊天记录导出工具.lnk`
+
+生成后可将该 `.lnk` 复制到桌面或固定到任务栏，双击即可直接打开图形界面。
 
 ## 输出格式
 
@@ -144,7 +150,6 @@ AI 的回答内容...
 ```
 playwright>=1.40.0
 python-docx>=0.8.11
-Pillow>=10.0.0
 ```
 
 ## 项目结构
@@ -153,6 +158,7 @@ Pillow>=10.0.0
 ai-chat-exporter/
 ├── chat_exporter_gui.py    # GUI 版主程序
 ├── extract_chat.py         # 命令行版主程序
+├── create_shortcut.py      # 生成桌面快捷方式（.lnk）
 ├── icon.ico                # 应用图标
 ├── requirements.txt        # Python 依赖
 ├── .gitignore
@@ -161,9 +167,6 @@ ai-chat-exporter/
 
 ## 常见问题
 
-### Q: EXE 启动后报错找不到浏览器？
-
-A: 需要安装 Chrome 浏览器，程序会自动使用系统 Chrome。
 
 ### Q: 导出的文件在哪里？
 
@@ -173,9 +176,7 @@ A: GUI 版默认导出到 `output` 目录，可通过界面更改。命令行版
 
 A: 公式会以 LaTeX 格式（`$...$`）导出，需要支持 LaTeX 的编辑器才能正确渲染。
 
-### Q: 如何更新到最新版本？
 
-A: 从 Releases 页面下载最新 EXE 覆盖即可。
 
 ## 许可证
 

@@ -46,206 +46,224 @@ def extract_from_url(url, timeout=30000, progress_callback=None):
         progress_callback("正在启动浏览器...")
 
     with sync_playwright() as p:
+        browser = None
         try:
-            browser = p.chromium.launch(headless=True, channel="chrome")
-        except Exception:
-            browser = p.chromium.launch(headless=True)
-        context = browser.new_context(
-            viewport={"width": 1920, "height": 1080},
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-        )
-        page = context.new_page()
-
-        if progress_callback:
-            progress_callback("正在加载页面...")
-
-        page.goto(url, wait_until="networkidle", timeout=timeout)
-
-        if platform == "deepseek":
             try:
-                page.wait_for_selector(".ds-message", timeout=timeout)
+                browser = p.chromium.launch(headless=True, channel="chrome")
             except Exception:
-                pass
-            page.wait_for_timeout(3000)
-        else:
-            page.wait_for_timeout(5000)
+                browser = p.chromium.launch(headless=True)
+            context = browser.new_context(
+                viewport={"width": 1920, "height": 1080},
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+            )
+            page = context.new_page()
 
-        if progress_callback:
-            progress_callback("正在提取元信息...")
+            if progress_callback:
+                progress_callback("正在加载页面...")
 
-        if platform == "deepseek":
-            meta = page.evaluate("""() => {
-                const info = {};
-                info.pageTitle = document.title || '';
-                const firstUserMsg = document.querySelector('.ds-collapsible-text, .fbb737a4');
-                info.firstMessage = firstUserMsg ? firstUserMsg.innerText.substring(0, 150) : '';
-                const ogTitle = document.querySelector('meta[property="og:title"]');
-                info.ogTitle = ogTitle ? ogTitle.content : '';
-                const fileEl = document.querySelector('._967f3f9, .e70accd6');
-                info.fileName = fileEl ? fileEl.innerText.trim() : '';
-                const thinkEls = document.querySelectorAll('.ds-think-content');
-                let paperTitle = '';
-                for (const el of thinkEls) {
-                    const text = el.innerText || '';
-                    const titleMatch = text.match(/题目[：:](.+)/);
-                    if (titleMatch) { paperTitle = titleMatch[1].trim(); break; }
-                    const engMatch = text.match(/(Predictive design.+?)(?:[.。\\\\n]|$)/i);
-                    if (engMatch) { paperTitle = engMatch[1].trim(); break; }
-                }
-                info.paperTitle = paperTitle;
-                return info;
-            }""")
-        else:
-            meta = page.evaluate("""() => {
-                const info = {};
-                info.pageTitle = document.title || '';
-                const firstQuestion = document.querySelector('.question-txt');
-                info.firstMessage = firstQuestion ? firstQuestion.innerText.substring(0, 150) : '';
-                const fileEl = document.querySelector('.question-file .file-box');
-                info.fileName = fileEl ? fileEl.innerText.trim().replace(/\\s*PDF\\s*[\\d.]+MB/, '') : '';
-                return info;
-            }""")
+            page.goto(url, wait_until="networkidle", timeout=timeout)
 
-        if progress_callback:
-            progress_callback("正在提取对话消息...")
+            if platform == "deepseek":
+                try:
+                    page.wait_for_selector(".ds-message", timeout=timeout)
+                except Exception:
+                    pass
+                page.wait_for_timeout(3000)
+            else:
+                page.wait_for_timeout(5000)
 
-        if platform == "deepseek":
-            messages = page.evaluate("""() => {
-                function extractNodeText(node) {
-                    if (node.nodeType === 3) {
-                        return node.textContent;
+            if progress_callback:
+                progress_callback("正在提取元信息...")
+
+            if platform == "deepseek":
+                meta = page.evaluate("""() => {
+                    const info = {};
+                    info.pageTitle = document.title || '';
+                    const firstUserMsg = document.querySelector('.ds-collapsible-text, .fbb737a4');
+                    info.firstMessage = firstUserMsg ? firstUserMsg.innerText.substring(0, 150) : '';
+                    const fileEl = document.querySelector('._967f3f9, .e70accd6');
+                    info.fileName = fileEl ? fileEl.innerText.trim() : '';
+                    const thinkEls = document.querySelectorAll('.ds-think-content');
+                    let paperTitle = '';
+                    for (const el of thinkEls) {
+                        const text = el.innerText || '';
+                        const titleMatch = text.match(/题目[：:](.+)/);
+                        if (titleMatch) { paperTitle = titleMatch[1].trim(); break; }
+                        const engMatch = text.match(/(Predictive design.+?)(?:[.。\\n]|$)/i);
+                        if (engMatch) { paperTitle = engMatch[1].trim(); break; }
                     }
-                    if (node.nodeType !== 1) return '';
+                    info.paperTitle = paperTitle;
+                    return info;
+                }""")
+            else:
+                meta = page.evaluate("""() => {
+                    const info = {};
+                    info.pageTitle = document.title || '';
+                    const firstQuestion = document.querySelector('.question-txt');
+                    info.firstMessage = firstQuestion ? firstQuestion.innerText.substring(0, 150) : '';
+                    const fileEl = document.querySelector('.question-file .file-box');
+                    info.fileName = fileEl ? fileEl.innerText.trim().replace(/\\s*PDF\\s*[\\d.]+MB/, '') : '';
+                    return info;
+                }""")
 
-                    const tag = node.tagName;
-                    const cls = (typeof node.className === 'string') ? node.className : '';
+            if progress_callback:
+                progress_callback("正在提取对话消息...")
 
-                    if (['SCRIPT', 'STYLE', 'BUTTON', 'SVG', 'PATH'].includes(tag)) return '';
-
-                    if (cls.includes('katex') || cls.includes('math') || cls.includes('equation') || tag === 'MATH') {
-                        const ann = node.querySelector('annotation[encoding="application/x-tex"]');
-                        if (ann) return '$' + ann.textContent + '$';
-                        return '$' + node.innerText.replace(/\\s+/g, ' ').trim() + '$';
-                    }
-
-                    if (tag === 'CODE' || tag === 'PRE') {
-                        return '`' + node.innerText + '`';
-                    }
-
-                    if (tag === 'TABLE') {
-                        return extractTable(node);
-                    }
-
-                    if (tag === 'IMG') {
-                        const alt = node.alt || '';
-                        const src = node.src || '';
-                        return '![' + alt + '](' + src + ')';
-                    }
-
-                    if (tag === 'BR') return '\\n';
-
-                    const blockTags = ['P', 'DIV', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6',
-                                       'LI', 'TR', 'BLOCKQUOTE', 'SECTION', 'ARTICLE'];
-                    const isBlock = blockTags.includes(tag);
-
-                    let result = '';
-                    for (const child of node.childNodes) {
-                        result += extractNodeText(child);
-                    }
-
-                    if (!cls.includes('katex') && !cls.includes('math')) {
-                        result = result.replace(/  +/g, ' ');
-                    }
-
-                    if (isBlock && result.trim()) {
-                        result = '\\n' + result.trim() + '\\n';
-                    }
-
-                    return result;
-                }
-
-                function extractTable(table) {
-                    const rows = [];
-                    for (const tr of table.querySelectorAll('tr')) {
-                        const cells = [];
-                        for (const td of tr.querySelectorAll('td, th')) {
-                            cells.push(td.innerText.replace(/\\|/g, '\\\\|').trim());
+            if platform == "deepseek":
+                messages = page.evaluate("""() => {
+                    function extractNodeText(node) {
+                        if (node.nodeType === 3) {
+                            return node.textContent;
                         }
-                        rows.push(cells);
-                    }
-                    if (rows.length === 0) return '';
-                    let md = '| ' + rows[0].join(' | ') + ' |\\n';
-                    md += '| ' + rows[0].map(() => '---').join(' | ') + ' |\\n';
-                    for (let i = 1; i < rows.length; i++) {
-                        md += '| ' + rows[i].join(' | ') + ' |\\n';
-                    }
-                    return '\\n' + md;
-                }
+                        if (node.nodeType !== 1) return '';
 
-                const results = [];
-                const allMsgs = document.querySelectorAll('.ds-message');
-                for (const msg of allMsgs) {
-                    const aiMain = msg.querySelector('.ds-assistant-message-main-content');
-                    if (aiMain) {
-                        let mainContent = extractNodeText(aiMain);
-                        const thinkEl = msg.querySelector('.ds-think-content');
-                        if (thinkEl) {
-                            const thinkText = extractNodeText(thinkEl);
-                            if (mainContent.startsWith(thinkText)) {
-                                mainContent = mainContent.substring(thinkText.length).trim();
+                        const tag = node.tagName;
+                        const cls = (typeof node.className === 'string') ? node.className : '';
+
+                        if (['SCRIPT', 'STYLE', 'BUTTON', 'SVG', 'PATH'].includes(tag)) return '';
+
+                        if (cls.includes('katex') || cls.includes('math') || cls.includes('equation') || tag === 'MATH') {
+                            const ann = node.querySelector('annotation[encoding="application/x-tex"]');
+                            if (ann) return '$' + ann.textContent + '$';
+                            return '$' + node.innerText.replace(/\\s+/g, ' ').trim() + '$';
+                        }
+
+                        if (tag === 'CODE' || tag === 'PRE') {
+                            return '`' + node.innerText + '`';
+                        }
+
+                        if (tag === 'TABLE') {
+                            return extractTable(node);
+                        }
+
+                        if (tag === 'IMG') {
+                            const alt = node.alt || '';
+                            const src = node.src || '';
+                            return '![' + alt + '](' + src + ')';
+                        }
+
+                        if (tag === 'BR') return '\\n';
+
+                        const blockTags = ['P', 'DIV', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6',
+                                           'LI', 'TR', 'BLOCKQUOTE', 'SECTION', 'ARTICLE'];
+                        const isBlock = blockTags.includes(tag);
+
+                        let result = '';
+                        for (const child of node.childNodes) {
+                            result += extractNodeText(child);
+                        }
+
+                        if (!cls.includes('katex') && !cls.includes('math')) {
+                            result = result.replace(/  +/g, ' ');
+                        }
+
+                        if (isBlock && result.trim()) {
+                            result = '\\n' + result.trim() + '\\n';
+                        }
+
+                        return result;
+                    }
+
+                    function extractTable(table) {
+                        const rows = [];
+                        for (const tr of table.querySelectorAll('tr')) {
+                            const cells = [];
+                            for (const td of tr.querySelectorAll('td, th')) {
+                                cells.push(td.innerText.replace(/\\|/g, '\\\\|').trim());
+                            }
+                            rows.push(cells);
+                        }
+                        if (rows.length === 0) return '';
+                        let md = '| ' + rows[0].join(' | ') + ' |\\n';
+                        md += '| ' + rows[0].map(() => '---').join(' | ') + ' |\\n';
+                        for (let i = 1; i < rows.length; i++) {
+                            md += '| ' + rows[i].join(' | ') + ' |\\n';
+                        }
+                        return '\\n' + md;
+                    }
+
+                    const results = [];
+                    const allMsgs = document.querySelectorAll('.ds-message');
+                    for (const msg of allMsgs) {
+                        const aiMain = msg.querySelector('.ds-assistant-message-main-content');
+                        if (aiMain) {
+                            let mainContent = extractNodeText(aiMain);
+                            const thinkEl = msg.querySelector('.ds-think-content');
+                            if (thinkEl) {
+                                const thinkText = extractNodeText(thinkEl);
+                                if (mainContent.startsWith(thinkText)) {
+                                    mainContent = mainContent.substring(thinkText.length).trim();
+                                }
+                            }
+                            mainContent = mainContent.replace(/\\n{3,}/g, '\\n\\n').trim();
+                            if (mainContent) {
+                                results.push({ role: 'assistant', content: mainContent });
+                            }
+                        } else {
+                            const userEl = msg.querySelector('.ds-collapsible-text') ||
+                                           msg.querySelector('.fbb737a4') ||
+                                           msg.querySelector('._25c7358');
+                            if (userEl) {
+                                const content = userEl.innerText.trim();
+                                if (content) {
+                                    results.push({ role: 'user', content: content });
+                                }
                             }
                         }
-                        mainContent = mainContent.replace(/\\n{3,}/g, '\\n\\n').trim();
-                        if (mainContent && mainContent.length > 5) {
-                            results.push({ role: 'assistant', content: mainContent });
+                    }
+                    return results;
+                }""")
+            else:
+                messages = page.evaluate("""() => {
+                    const items = document.querySelectorAll('.conversation-item');
+                    const messages = [];
+
+                    for (const item of items) {
+                        const questionTxt = item.querySelector('.question-txt');
+                        if (questionTxt) {
+                            const userText = questionTxt.innerText.trim();
+                            if (userText) {
+                                messages.push({role: 'user', content: userText});
+                            }
                         }
-                    } else {
-                        const userEl = msg.querySelector('.ds-collapsible-text') ||
-                                       msg.querySelector('.fbb737a4') ||
-                                       msg.querySelector('._25c7358');
-                        if (userEl) {
-                            const content = userEl.innerText.trim();
-                            if (content && content.length > 2) {
-                                results.push({ role: 'user', content: content });
+
+                        const answerWraps = item.querySelectorAll('.answer-content-wrap:not(.text-advance-thinking-content)');
+                        if (answerWraps.length > 0) {
+                            const lastAnswer = answerWraps[answerWraps.length - 1];
+                            const answerText = lastAnswer.innerText.trim();
+                            if (answerText) {
+                                messages.push({role: 'assistant', content: answerText});
                             }
                         }
                     }
-                }
-                return results;
-            }""")
-        else:
-            messages = page.evaluate("""() => {
-                const items = document.querySelectorAll('.conversation-item');
-                const messages = [];
 
-                for (const item of items) {
-                    const questionTxt = item.querySelector('.question-txt');
-                    if (questionTxt) {
-                        const userText = questionTxt.innerText.trim();
-                        if (userText) {
-                            messages.push({role: 'user', content: userText});
-                        }
-                    }
+                    return messages;
+                }""")
 
-                    const answerWraps = item.querySelectorAll('.answer-content-wrap:not(.text-advance-thinking-content)');
-                    if (answerWraps.length > 0) {
-                        const lastAnswer = answerWraps[answerWraps.length - 1];
-                        const answerText = lastAnswer.innerText.trim();
-                        if (answerText) {
-                            messages.push({role: 'assistant', content: answerText});
-                        }
-                    }
-                }
-
-                return messages;
-            }""")
-
-        browser.close()
+        finally:
+            if browser:
+                try:
+                    browser.close()
+                except Exception:
+                    pass
 
     return messages, meta, platform
 
 
-def generate_smart_filename(meta, platform="deepseek"):
+def add_ext(base, ext):
+    """为不含扩展名的路径追加扩展名。
+
+    不使用 Path.with_suffix()，因为它会把文件名中最后一个 "." 之后的内容
+    当作旧扩展名替换掉（例如 "Qwen2.5模型评测" 会变成 "Qwen2.md"）。
+    若路径已带目标扩展名则原样返回。
+    """
+    base = Path(base)
+    if base.suffix.lower() == ext:
+        return base
+    return base.with_name(base.name + ext)
+
+
+def generate_smart_filename(meta):
     """根据元信息生成智能文件名。"""
     topic = ""
     file_name = meta.get("fileName", "")
@@ -274,15 +292,16 @@ def parse_messages_to_markdown(messages, title="AI 对话记录"):
     def split_questions(text):
         """将包含多个编号问题的文本拆分为独立问题列表。"""
         # 匹配 1、2、3、 或 1. 2. 3. 等编号格式
-        parts = _re.split(r'\n(?=\d+[、.．]\s)', text.strip())
+        # 中文标点（、．）后不要求空格；英文句点后要求空格，避免误拆 "1.5" 之类数字
+        parts = _re.split(r'\n(?=\d+[、．]\s*|\d+\.\s)', text.strip())
         if len(parts) <= 1:
             parts = _re.split(r'\n(?=(?:问题|Q)\s*\d+)', text.strip())
         return [p.strip() for p in parts if p.strip()]
 
     def split_answers_by_questions(text, expected_count):
         """根据问题数量拆分答案。只在答案段落数与问题数匹配时才拆分。"""
-        # 先尝试按编号拆分
-        parts = _re.split(r'\n(?=\d+[.．：:]\s)', text.strip())
+        # 中文标点（．：）后不要求空格；英文句点/冒号后要求空格
+        parts = _re.split(r'\n(?=\d+[．：]\s*|\d+[.:]\s)', text.strip())
         if len(parts) <= 1:
             parts = _re.split(r'\n(?=\d+\s)', text.strip())
 
@@ -479,7 +498,8 @@ class ChatExporterGUI:
         btn_frame = ttk.Frame(frame_top)
         btn_frame.pack(fill=tk.X)
 
-        ttk.Button(btn_frame, text="开始导出", command=self._start_export).pack(side=tk.LEFT)
+        self.btn_export = ttk.Button(btn_frame, text="开始导出", command=self._start_export)
+        self.btn_export.pack(side=tk.LEFT)
         ttk.Button(btn_frame, text="选择输出目录", command=self._choose_dir).pack(side=tk.LEFT, padx=(8, 0))
 
         self.dir_var = tk.StringVar(value=str(self.output_dir))
@@ -543,12 +563,26 @@ class ChatExporterGUI:
             messagebox.showwarning("提示", "支持的链接格式:\n- DeepSeek (chat.deepseek.com/share/...)\n- 智谱清言 (chatglm.cn/share/...)")
             return
 
-        # 在后台线程执行导出
+        # 在主线程中读取界面状态，避免工作线程访问 tkinter 变量（非线程安全）
+        fmt_md = self.fmt_md.get()
+        fmt_docx = self.fmt_docx.get()
+        fmt_json = self.fmt_json.get()
+        if not (fmt_md or fmt_docx or fmt_json):
+            messagebox.showwarning("提示", "请至少选择一种输出格式")
+            return
+        output_dir = self.output_dir
+
+        # 禁用导出按钮，防止重复点击产生并发导出
+        self.btn_export.config(state=tk.DISABLED)
         self.progress_bar.start(12)
         self.progress_var.set("正在导出，请稍候...")
-        threading.Thread(target=self._export_thread, args=(url,), daemon=True).start()
+        threading.Thread(
+            target=self._export_thread,
+            args=(url, fmt_md, fmt_docx, fmt_json, output_dir),
+            daemon=True,
+        ).start()
 
-    def _export_thread(self, url):
+    def _export_thread(self, url, fmt_md, fmt_docx, fmt_json, output_dir):
         try:
             messages, meta, platform = extract_from_url(
                 url, progress_callback=lambda msg: self.root.after(0, self.progress_var.set, msg)
@@ -557,29 +591,29 @@ class ChatExporterGUI:
                 self.root.after(0, self._on_error, "未能提取到对话内容")
                 return
 
-            safe_name = generate_smart_filename(meta, platform)
-            output_base = self.output_dir / safe_name
+            safe_name = generate_smart_filename(meta)
+            output_base = output_dir / safe_name
 
             saved = []
 
             # Markdown
-            if self.fmt_md.get():
+            if fmt_md:
                 md_text = parse_messages_to_markdown(messages, title=safe_name)
-                path = save_markdown(md_text, output_base.with_suffix(".md"))
+                path = save_markdown(md_text, add_ext(output_base, ".md"))
                 saved.append(path)
 
             # Word
-            if self.fmt_docx.get():
+            if fmt_docx:
                 md_text = parse_messages_to_markdown(messages, title=safe_name)
-                path, err = save_docx(md_text, output_base.with_suffix(".docx"))
+                path, err = save_docx(md_text, add_ext(output_base, ".docx"))
                 if err:
                     self.root.after(0, messagebox.showwarning, "Word 导出失败", err)
                 elif path:
                     saved.append(path)
 
             # JSON
-            if self.fmt_json.get():
-                path = save_json(messages, output_base.with_suffix(".json"))
+            if fmt_json:
+                path = save_json(messages, add_ext(output_base, ".json"))
                 saved.append(path)
 
             self.root.after(0, self._on_done, saved)
@@ -589,6 +623,7 @@ class ChatExporterGUI:
 
     def _on_done(self, saved_files):
         self.progress_bar.stop()
+        self.btn_export.config(state=tk.NORMAL)
         count = len(saved_files)
         self.progress_var.set(f"导出完成，共 {count} 个文件")
         self._refresh_file_list()
@@ -597,6 +632,7 @@ class ChatExporterGUI:
 
     def _on_error(self, msg):
         self.progress_bar.stop()
+        self.btn_export.config(state=tk.NORMAL)
         self.progress_var.set("导出失败")
         messagebox.showerror("错误", msg)
 
@@ -607,17 +643,29 @@ class ChatExporterGUI:
         if not self.output_dir.exists():
             return
 
-        for f in sorted(self.output_dir.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True):
-            if f.suffix.lower() in (".md", ".docx", ".json"):
-                size = f.stat().st_size
-                if size > 1024 * 1024:
-                    size_str = f"{size / 1024 / 1024:.1f} MB"
-                elif size > 1024:
-                    size_str = f"{size / 1024:.1f} KB"
-                else:
-                    size_str = f"{size} B"
-                fmt = f.suffix.upper().lstrip(".")
-                self.tree.insert("", tk.END, values=(f.name, size_str, fmt), iid=str(f))
+        # 先收集 (mtime, path, size)，任何文件出错（被占用/已删除/断链）都跳过，避免界面崩溃
+        entries = []
+        try:
+            candidates = list(self.output_dir.iterdir())
+        except OSError:
+            return
+        for f in candidates:
+            try:
+                if f.suffix.lower() in (".md", ".docx", ".json"):
+                    stat = f.stat()
+                    entries.append((stat.st_mtime, f, stat.st_size))
+            except OSError:
+                continue
+
+        for mtime, f, size in sorted(entries, key=lambda e: e[0], reverse=True):
+            if size > 1024 * 1024:
+                size_str = f"{size / 1024 / 1024:.1f} MB"
+            elif size > 1024:
+                size_str = f"{size / 1024:.1f} KB"
+            else:
+                size_str = f"{size} B"
+            fmt = f.suffix.upper().lstrip(".")
+            self.tree.insert("", tk.END, values=(f.name, size_str, fmt), iid=str(f))
 
     def _open_file(self, event):
         sel = self.tree.selection()

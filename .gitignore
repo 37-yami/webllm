@@ -28,3 +28,7 @@ desktop.ini
 *.tmp
 *.log
 *.bak
+
+# 本机产物（快捷方式含本机绝对路径，release 压缩包不入库）
+*.lnk
+*.zip
